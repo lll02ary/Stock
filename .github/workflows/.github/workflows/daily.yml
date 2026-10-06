@@ -1,0 +1,59 @@
+name: 台股盤後選股
+
+on:
+  schedule:
+    # 週一到週五 台北時間 17:00（GitHub 使用 UTC 時間，17:00 - 8 小時 = 09:00）
+    - cron: "0 9 * * 1-5"
+  workflow_dispatch: {}   # 允許手動按按鈕執行
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-screener
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 還原歷史行情快取
+        uses: actions/cache/restore@v4
+        with:
+          path: data/cache
+          key: twstock-data-${{ github.run_id }}
+          restore-keys: twstock-data-
+
+      - name: 執行選股並寄出 Email
+        env:
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python main.py
+
+      - name: 儲存歷史行情快取（就算寄信失敗也先存，下次不用重抓）
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/cache
+          key: twstock-data-${{ github.run_id }}
+
+      - name: 保存今日報告（可在執行紀錄頁下載，保留 30 天）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ github.run_number }}
+          path: output/
+          retention-days: 30
+          if-no-files-found: ignore
