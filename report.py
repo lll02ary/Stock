@@ -34,7 +34,8 @@ h2{font-size:1.3rem;margin:44px 0 6px}
 .top .px{text-align:right}
 .top .px .c{font-size:1.4rem;font-weight:600}
 .top .px .s{font-size:.85rem;color:var(--muted)}
-.top ul{grid-column:2/4;margin:8px 0 0;padding-left:1.1em;font-size:.93rem}.top ul li{margin:2px 0}
+.top ul{grid-column:2/4;margin:8px 0 0;padding-left:1.1em;font-size:.93rem}
+.top ul li{margin:2px 0}
 .up,.top .px .up{color:var(--up)}.down,.top .px .down{color:var(--down)}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--surface);border:1px solid var(--line);border-radius:6px}
 table{border-collapse:collapse;width:100%;font-size:.9rem;white-space:nowrap}
@@ -130,11 +131,11 @@ def _rules():
 <li>基本門檻：5 日均量 ≥ {c.MIN_AVG_VOLUME_LOTS} 張，只看上市櫃普通股（排除 ETF、權證、特別股）。</li>
 <li>型態①趨勢扭轉：之前至少連續 {c.TURN_MIN_DAYS_BELOW} 天收在 5MA 或 10MA 之下，今天收盤站上。站上一條 {c.SCORE_TURN_ONE_LINE} 分，兩條 {c.SCORE_TURN_BOTH} 分。</li>
 <li>型態③箱型量增：近 {c.BOX_DAYS} 日最高最低價差 ≤ {c.BOX_MAX_RANGE_PCT:.0f}%，且 5 日均量 &gt; 10 日均量 &gt; 20 日均量。{c.SCORE_BOX} 分。</li>
-<li>型態②空頭爆量搶反彈：5、10、20、60MA 空頭排列且股價在均線下，今日量 ≥ 前 5 日均量 {c.REBOUND_VOLUME_RATIO:.0f} 倍，K 棒收紅或下影線 ≥ 實體 {c.REBOUND_SHADOW_TO_BODY} 倍（且下影線至少佔股價 {c.REBOUND_SHADOW_MIN_PCT:.0f}%）。另列清單，不列入前 5 名。</li>
+<li>型態②空頭爆量搶反彈：5、10、20、60MA 空頭排列且股價在均線下，今日量 ≥ 前 5 日均量 {c.REBOUND_VOLUME_RATIO:.0f} 倍，K 棒收紅或下影線 ≥ 實體 {c.REBOUND_SHADOW_TO_BODY} 倍。另列清單，不列入前 5 名。</li>
 <li>輔助加分：MACD 第一根紅柱 {c.SCORE_MACD_FIRST_RED} 分、KD 黃金交叉（今天或昨天）{c.SCORE_KD_GOLDEN} 分、RSI6 由下往上突破 50 {c.SCORE_RSI_CROSS_50} 分。</li>
 <li>族群熱度：今日資金占比相對前 20 日的變化 {c.ROTATION_WEIGHTS['share_vs_20d']:.0%}、近 5 日占比延續性 {c.ROTATION_WEIGHTS['share_5d_vs_20d']:.0%}、族群平均漲幅 {c.ROTATION_WEIGHTS['avg_change']:.0%}、上漲家數比例 {c.ROTATION_WEIGHTS['up_ratio']:.0%}，換算成 0～100 分。</li>
-<li>前 5 名總分：個股分數 ×（1 ＋ 族群熱度 ÷ 100 × {c.GROUP_HEAT_MAX_BOOST}），族群越熱，加成越多，最多 {1 + c.GROUP_HEAT_MAX_BOOST:.1f} 倍。</li>
-<li>參數都在 config.py，可以自行調整。</li></ul></details>"""
+<li>前 5 名總分：個股分數 ＋ 族群熱度 × {c.GROUP_HEAT_MAX_BONUS / 100:.1f}（最多加 {c.GROUP_HEAT_MAX_BONUS} 分）。</li>
+<li>參數都在 config.py，可以自行調整。程式版本：{escape(c.VERSION)}</li></ul></details>"""
 
 
 def render(date, top, rotation, trend, rebound, scanned, archive_links=(), note=""):
@@ -175,151 +176,3 @@ def render_closed(date, reason):
 <title>台股盤後選股</title><style>{CSS}</style></head><body><main>
 <header><h1>台股盤後選股</h1><div class="date">{date}</div></header>
 <p class="empty">{escape(reason)}</p></main></body></html>"""
-
-
-# ── Email 版（Gmail 不支援 CSS 變數與 grid，全部改用行內樣式與表格）──────────
-
-_E = {
-    "ink": "#15202B", "muted": "#5E6B78", "line": "#D9DEE3", "bg": "#F3F5F7",
-    "up": "#C62828", "down": "#1B7F4C", "caution": "#A86A12", "chip": "#E8EDF2",
-}
-_FONT = "'PingFang TC','Microsoft JhengHei','Noto Sans TC',Arial,sans-serif"
-
-
-def _ec(x):
-    if x is None or (isinstance(x, float) and math.isnan(x)) or x == 0:
-        return _E["ink"]
-    return _E["up"] if x > 0 else _E["down"]
-
-
-def _eh2(text):
-    return (f'<h2 style="font-size:18px;margin:28px 0 8px;color:{_E["ink"]};'
-            f'border-bottom:2px solid {_E["ink"]};padding-bottom:4px">{escape(text)}</h2>')
-
-
-def _etable(head, rows):
-    th = "".join(f'<th style="text-align:{a};padding:6px 8px;font-size:12px;color:{_E["muted"]};'
-                 f'border-bottom:1px solid {_E["line"]};white-space:nowrap">{escape(h)}</th>'
-                 for h, a in head)
-    body = []
-    for r in rows:
-        tds = "".join(f'<td style="text-align:{a};padding:6px 8px;font-size:13px;'
-                      f'border-bottom:1px solid {_E["line"]};vertical-align:top;color:{col}">{v}</td>'
-                      for v, a, col in r)
-        body.append(f"<tr>{tds}</tr>")
-    return (f'<table cellpadding="0" cellspacing="0" border="0" '
-            f'style="border-collapse:collapse;width:100%;background:#FFFFFF">'
-            f"<thead><tr>{th}</tr></thead><tbody>{''.join(body)}</tbody></table>")
-
-
-def render_email(date, top, rotation, trend, rebound, scanned):
-    ink, muted = _E["ink"], _E["muted"]
-    parts = [f'<div style="font-family:{_FONT};color:{ink};max-width:720px;margin:0 auto;'
-             f'padding:16px;background:#FFFFFF;line-height:1.6">',
-             f'<div style="font-size:14px;color:{muted}">台股盤後選股</div>',
-             f'<div style="font-size:28px;font-weight:700;line-height:1.2">{escape(date)}</div>',
-             f'<div style="font-size:13px;color:{muted};margin-top:4px">掃描 {scanned:,} 檔｜'
-             f'符合型態 {len(trend)} 檔｜搶反彈候選 {len(rebound)} 檔</div>']
-
-    # 前 5 名
-    parts.append(_eh2(f"今日最該留意的 {config.TOP_N} 檔"))
-    if not len(top):
-        parts.append(f'<p style="color:{muted}">今天沒有股票符合趨勢扭轉或箱型量增的條件。</p>')
-    for i, (code, r) in enumerate(top.iterrows(), 1):
-        grank = r.get("group_rank")
-        gtxt = f"族群熱度第 {grank} 名" if grank is not None and str(grank) != "<NA>" else "族群未排名"
-        reasons = "".join(f"<li>{escape(x)}</li>" for x in r["reasons"])
-        col = _ec(r["chg_pct"])
-        parts.append(f"""
-<table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-bottom:1px solid {_E['line']};margin:0 0 4px">
-<tr><td style="width:28px;font-size:20px;font-weight:700;color:{muted};vertical-align:top;padding:10px 0">{i}</td>
-<td style="vertical-align:top;padding:10px 0">
-<span style="font-size:22px;font-weight:700">{escape(code)}</span>
-<span style="font-size:16px;margin-left:6px">{escape(str(r['name']))}</span><br>
-<span style="font-size:12px;background:{_E['chip']};padding:1px 6px;border-radius:3px">{escape(str(r['industry']))}</span>
-<span style="font-size:12px;color:{muted}">　{gtxt}　量 {r['vol_ratio']:.1f} 倍</span>
-<ul style="margin:6px 0 0;padding-left:18px;font-size:13px">{reasons}</ul></td>
-<td style="text-align:right;vertical-align:top;padding:10px 0;white-space:nowrap">
-<div style="font-size:18px;font-weight:600;color:{col}">{_f(r['close'])}</div>
-<div style="font-size:12px;color:{col}">{_f(r['chg_pct'], 2, True)}%</div>
-<div style="font-size:12px;color:{muted}">總分 {r['final']:.0f}</div></td></tr></table>""")
-
-    # 族群
-    parts.append(_eh2("資金輪動：族群熱度排名"))
-    if len(rotation):
-        rows = []
-        for i, (ind, r) in enumerate(rotation.head(config.EMAIL_SECTORS).iterrows(), 1):
-            rows.append([(str(i), "right", muted), (escape(str(ind)), "left", ink),
-                         (f"{r['heat']:.0f}", "right", ink),
-                         (f"{_f(r['share_vs_20d'], 2)}×", "right", ink),
-                         (f"{_f(r['avg_change'], 2, True)}%", "right", _ec(r["avg_change"])),
-                         (f"{_f(r['up_ratio'], 0)}%", "right", ink)])
-        parts.append(_etable([("#", "right"), ("族群", "left"), ("熱度", "right"),
-                              ("資金占比 vs 20日", "right"), ("平均漲跌", "right"),
-                              ("上漲比例", "right")], rows))
-        parts.append(f'<p style="font-size:12px;color:{muted}">「資金占比 vs 20日」大於 1，'
-                     f'代表今天流進這個族群的資金比平常多。</p>')
-    else:
-        parts.append(f'<p style="color:{muted}">無法取得產業分類，今天沒有族群資料。</p>')
-
-    def stock_rows(df, show_k=False):
-        rows = []
-        for i, (code, r) in enumerate(df.head(config.LIST_LIMIT).iterrows(), 1):
-            row = [(str(i), "right", muted), (escape(code), "left", ink),
-                   (escape(str(r["name"])), "left", ink), (escape(str(r["industry"])), "left", muted),
-                   (f"{r['score']:.0f}", "right", ink),
-                   (f"{_f(r['chg_pct'], 2, True)}%", "right", _ec(r["chg_pct"])),
-                   (f"{_f(r['vol_ratio'], 1)}×", "right", ink)]
-            if show_k:
-                row.append((escape(r["k_type"]), "left", ink))
-            row.append((escape("、".join(r["reasons"])), "left", muted))
-            rows.append(row)
-        head = [("#", "right"), ("代號", "left"), ("名稱", "left"), ("族群", "left"),
-                ("分數", "right"), ("漲跌", "right"), ("量比", "right")]
-        if show_k:
-            head.append(("K 棒", "left"))
-        head.append(("入選理由", "left"))
-        return _etable(head, rows)
-
-    parts.append(_eh2("符合買進型態的股票"))
-    if len(trend):
-        parts.append(f'<p style="font-size:12px;color:{muted}">共 {len(trend)} 檔，'
-                     f'顯示前 {min(len(trend), config.LIST_LIMIT)} 檔，完整清單請看附件。</p>')
-        parts.append(stock_rows(trend))
-    else:
-        parts.append(f'<p style="color:{muted}">今天沒有符合條件的股票。</p>')
-
-    parts.append(_eh2("空頭爆量搶反彈"))
-    parts.append(f'<p style="font-size:13px;border-left:3px solid {_E["caution"]};padding:6px 10px;'
-                 f'background:{_E["bg"]}">逆勢搶反彈，風險比順勢高。請搭配 K 棒判斷是止跌還是恐慌殺盤。</p>')
-    if len(rebound):
-        parts.append(stock_rows(rebound, show_k=True))
-    else:
-        parts.append(f'<p style="color:{muted}">今天沒有符合條件的股票。</p>')
-
-    parts.append(f'<p style="font-size:12px;color:{muted};margin-top:28px">附件 report.html 是完整版報告'
-                 f'（含選股規則說明），用瀏覽器開啟；candidates.csv 可以用 Excel 開啟。<br>'
-                 f'資料來源：臺灣證券交易所、證券櫃檯買賣中心。本報告依設定的技術條件自動篩選，'
-                 f'僅供參考，不構成投資建議。</p></div>')
-    return "".join(parts)
-
-
-def to_csv(trend, rebound):
-    """所有候選股（含搶反彈）存成 CSV，Excel 可直接開啟。"""
-    import pandas as pd
-    cols = ["name", "market", "industry", "score", "close", "chg_pct", "volume", "vol_ratio", "reasons"]
-    frames = []
-    for label, df in (("順勢", trend), ("搶反彈", rebound)):
-        if len(df):
-            d = df.reindex(columns=cols).copy()
-            d["reasons"] = d["reasons"].apply(lambda x: "、".join(x) if isinstance(x, list) else "")
-            d.insert(0, "類型", label)
-            frames.append(d)
-    if not frames:
-        return "代號,類型\n".encode("utf-8-sig")
-    out = pd.concat(frames)
-    out.index.name = "代號"
-    out = out.rename(columns={"name": "名稱", "market": "市場", "industry": "族群", "score": "分數",
-                              "close": "收盤", "chg_pct": "漲跌%", "volume": "成交量(張)",
-                              "vol_ratio": "量比", "reasons": "入選理由"})
-    return out.round(2).to_csv().encode("utf-8-sig")

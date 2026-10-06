@@ -84,7 +84,7 @@ def screen_stocks(panels, names, stock_list):
     vol_ma = {n: v.rolling(n).mean() for n in (5, 10, 20)}
 
     t = -1  # 今天
-    close_t, open_t, high_t, low_t = c.iloc[t], o.iloc[t], h.iloc[t], l.iloc[t]
+    close_t, open_t, low_t = c.iloc[t], o.iloc[t], l.iloc[t]
     vol_t = v.iloc[t]
     df = pd.DataFrame(index=c.columns)
     df["name"] = names.reindex(df.index)
@@ -139,7 +139,6 @@ def screen_stocks(panels, names, stock_list):
     kd_golden = golden_today | golden_yday
     rsi_cross = (r.iloc[-2] < 50) & (r.iloc[t] >= 50)
     df["macd_red"], df["kd_golden"], df["rsi_cross"] = macd_red, kd_golden, rsi_cross
-    df["k"], df["d"], df["rsi6"] = k.iloc[t], d.iloc[t], r.iloc[t]
 
     df["main_score"] = turn_score + np.where(box, cfg.SCORE_BOX, 0)
     df["rebound_score"] = np.where(rebound, cfg.SCORE_REBOUND, 0)
@@ -153,10 +152,9 @@ def screen_stocks(panels, names, stock_list):
     else:
         df["market"], df["industry"] = "", "未分類"
     df["industry"] = df["industry"].fillna("其他")
-    df["reasons"] = df.apply(_reasons, axis=1)
+    df["reasons"] = df.apply(_reasons, axis=1) if len(df) else pd.Series(dtype=object)
 
-    # 搶反彈股性質不同，和順勢股完全分開
-    trend = df[(df["main_score"] > 0) & ~df["rebound"]].copy()
+    trend = df[df["main_score"] > 0].copy()
     trend["score"] = trend["main_score"] + trend["aux_score"]
     trend = trend.sort_values(["score", "vol_ratio"], ascending=False)
 
@@ -211,10 +209,9 @@ def sector_rotation(panels, stock_list):
     traded = tv.iloc[-1] > 0
     g = pd.DataFrame({"chg": chg[traded], "ind": ind[traded]})
     grp = g.groupby("ind")
-    members = grp.size()
 
     out = pd.DataFrame({
-        "members": members,
+        "members": grp.size(),
         "turnover_today": sector_tv.iloc[-1] / 1e8,  # 億元
         "share_today": share_today,
         "share_20d": share_20,
@@ -232,7 +229,7 @@ def sector_rotation(panels, stock_list):
 # ── 綜合前 5 名 ───────────────────────────────────────
 
 def pick_top(trend, rotation):
-    """個股分數 ×（1 + 族群熱度加成）。搶反彈股性質不同，不列入前 5 名。"""
+    """個股分數 ＋ 所屬族群熱度加分。搶反彈股性質不同，不列入前 5 名。"""
     if not len(trend):
         return trend
     t = trend.copy()
@@ -240,5 +237,5 @@ def pick_top(trend, rotation):
     t["group_heat"] = t["industry"].map(heat).fillna(50)
     t["group_rank"] = t["industry"].map(
         pd.Series(range(1, len(heat) + 1), index=heat.index)).astype("Int64")
-    t["final"] = t["score"] * (1 + t["group_heat"] / 100 * config.GROUP_HEAT_MAX_BOOST)
+    t["final"] = t["score"] + t["group_heat"] / 100 * config.GROUP_HEAT_MAX_BONUS
     return t.sort_values(["final", "vol_ratio"], ascending=False).head(config.TOP_N)

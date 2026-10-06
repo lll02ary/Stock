@@ -101,60 +101,31 @@ def fetch_twse_day(date: dt.date):
     return _rows_to_df(table["data"], idx)
 
 
-TPEX_DEFAULT_FIELDS = ["代號", "名稱", "收盤", "漲跌", "開盤", "最高", "最低", "均價",
-                       "成交股數", "成交金額", "成交筆數"]
-
-
-def _tpex_idx(f):
-    return {
+def fetch_tpex_day(date: dt.date):
+    """上櫃每日收盤行情。休市回傳 None。"""
+    url = "https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes"
+    j = _get(url, {"date": date.strftime("%Y/%m/%d"), "response": "json"}).json()
+    tables = j.get("tables") or []
+    if not tables or not tables[0].get("data"):
+        return None
+    t = tables[0]
+    f = t.get("fields") or []
+    # 預設欄位順序：代號、名稱、收盤、漲跌、開盤、最高、最低、均價、成交股數、成交金額、成交筆數
+    idx = {
         "code": _find_col(f, "代號", default=0), "name": _find_col(f, "名稱", default=1),
         "close": _find_col(f, "收盤", default=2), "open": _find_col(f, "開盤", default=4),
         "high": _find_col(f, "最高", default=5), "low": _find_col(f, "最低", default=6),
         "volume": _find_col(f, "成交股數", default=8),
         "turnover": _find_col(f, "成交金額", default=9),
     }
-
-
-def fetch_tpex_day(date: dt.date):
-    """上櫃每日收盤行情。休市回傳 None。櫃買中心改版過網址，所以依序嘗試三個來源。"""
-    ymd = date.strftime("%Y/%m/%d")
-    roc = f"{date.year - 1911}/{date.month:02d}/{date.day:02d}"
-    sources = [
-        ("https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes",
-         {"date": ymd, "response": "json"}),
-        ("https://www.tpex.org.tw/www/zh-tw/afterTrading/otc",
-         {"date": ymd, "type": "EW", "response": "json"}),
-        ("https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php",
-         {"l": "zh-tw", "d": roc, "se": "EW"}),
-    ]
-    errors = []
-    for url, params in sources:
-        try:
-            j = _get(url, params).json()
-        except Exception as e:  # noqa: BLE001
-            errors.append(str(e))
-            continue
-        # 新版格式：tables[].fields / data
-        for t in j.get("tables") or []:
-            f = [str(x) for x in (t.get("fields") or [])]
-            if t.get("data") and (not f or (_find_col(f, "代號") is not None
-                                              and _find_col(f, "收盤") is not None)):
-                return _rows_to_df(t["data"], _tpex_idx(f or TPEX_DEFAULT_FIELDS))
-        # 舊版格式：aaData
-        if j.get("aaData"):
-            return _rows_to_df(j["aaData"], _tpex_idx(TPEX_DEFAULT_FIELDS))
-        # 這個來源回應正常但沒有資料 → 視為休市
-        if "tables" in j or "aaData" in j or "stat" in j:
-            return None
-    raise RuntimeError("櫃買中心三個來源都無法取得資料：" + "；".join(errors))
+    return _rows_to_df(t["data"], idx)
 
 
 def _rows_to_df(rows, idx):
     out = []
     for r in rows:
-        code = str(r[idx["code"]]).strip()
         out.append({
-            "code": code,
+            "code": str(r[idx["code"]]).strip(),
             "name": str(r[idx["name"]]).strip(),
             "open": _num(r[idx["open"]]), "high": _num(r[idx["high"]]),
             "low": _num(r[idx["low"]]), "close": _num(r[idx["close"]]),
@@ -228,38 +199,11 @@ def _ensure_day(market, date, fetcher, today):
     return True
 
 
-def _ensure_tpex(date):
-    """上市有交易的日子，上櫃一定也有。抓不到時不標記休市，下次執行會再補抓。"""
-    f = _day_file("tpex", date)
-    if f.exists():
-        return
-    try:
-        df = fetch_tpex_day(date)
-    except Exception as e:  # noqa: BLE001
-        print(f"  ⚠ {date} 上櫃資料暫時抓不到，下次再補：{e}")
-        return
-    if df is not None:
-        df.to_csv(f, index=False)
-    else:
-        print(f"  ⚠ {date} 上櫃資料尚未公布，下次再補")
-
-
-def latest_trading_date():
-    """快取中最新一個有上市資料的日期。"""
-    dates = []
-    for p in DAILY_DIR.glob("twse_*.csv"):
-        try:
-            dates.append(dt.datetime.strptime(p.stem.split("_")[1], "%Y%m%d").date())
-        except (IndexError, ValueError):
-            pass
-    return max(dates) if dates else None
-
-
 def update_history(today=None):
     """
     補齊最近 HISTORY_TRADING_DAYS 個交易日的資料。
     回傳 (今天是否有資料, 新抓取的天數)。
-    第一次執行要抓約半年資料，大約需要 20 分鐘；之後每天只抓 1 天。
+    第一次執行要抓約半年資料，大約需要 20～30 分鐘；之後每天只抓 1 天。
     """
     DAILY_DIR.mkdir(parents=True, exist_ok=True)
     today = today or taipei_today()
@@ -267,9 +211,8 @@ def update_history(today=None):
     found, fetched = 0, 0
     today_ok = None
     d = today
-    max_lookback = int(need * 1.6) + 30
     oldest_kept = today
-    for _ in range(max_lookback):
+    for _ in range(int(need * 1.6) + 30):
         if found >= need:
             break
         if d.weekday() < 5:
@@ -280,7 +223,7 @@ def update_history(today=None):
                     print(f"  抓取中… 目前到 {d}（已抓 {fetched} 天）")
             ok = _ensure_day("twse", d, fetch_twse_day, today)
             if ok:
-                _ensure_tpex(d)
+                _ensure_day("tpex", d, fetch_tpex_day, today)
                 found += 1
                 oldest_kept = d
             if d == today:
@@ -290,10 +233,10 @@ def update_history(today=None):
     # 清掉用不到的舊檔案
     for p in DAILY_DIR.iterdir():
         try:
-            pd_date = dt.datetime.strptime(p.stem.split("_")[1], "%Y%m%d").date()
+            file_date = dt.datetime.strptime(p.stem.split("_")[1], "%Y%m%d").date()
         except (IndexError, ValueError):
             continue
-        if pd_date < oldest_kept - dt.timedelta(days=10):
+        if file_date < oldest_kept - dt.timedelta(days=10):
             p.unlink()
     return bool(today_ok), fetched
 
@@ -302,7 +245,7 @@ def load_history() -> pd.DataFrame:
     """讀取快取中的所有日資料，合併成一張長表。"""
     frames = []
     for p in sorted(DAILY_DIR.glob("*.csv")):
-        market, ds = p.stem.split("_")
+        _, ds = p.stem.split("_")
         df = pd.read_csv(p, dtype={"code": str})
         df["date"] = pd.Timestamp(dt.datetime.strptime(ds, "%Y%m%d"))
         frames.append(df)

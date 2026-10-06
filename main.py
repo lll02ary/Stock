@@ -1,52 +1,38 @@
 """
-台股盤後選股：主程式
-用法：
-  python main.py            正常執行（抓資料 → 選股 → 寄 Email）
-  python main.py --no-email 只產生報告檔，不寄信（在自己電腦測試用）
+台股盤後選股（網頁版）：主程式
+用法：python main.py
 """
-import argparse
 import os
 import smtplib
 import sys
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
 import analysis
+import config
 import data
 import report
-import pandas as pd
 
-OUT = Path(__file__).parent / "output"
+DOCS = Path(__file__).parent / "docs"
+ARCHIVE = DOCS / "archive"
 
 
-def send_email(subject, html_body, attachments):
-    """用 Gmail 寄出報告。需要 GitHub Secrets：MAIL_USERNAME、MAIL_PASSWORD、MAIL_TO。"""
+def send_email(subject, html):
+    """選用：有設定 MAIL_USERNAME / MAIL_PASSWORD / MAIL_TO 才寄信（Gmail 需使用應用程式密碼）。"""
     user, pw, to = (os.environ.get(k, "").strip() for k in ("MAIL_USERNAME", "MAIL_PASSWORD", "MAIL_TO"))
-    missing = [k for k, v in (("MAIL_USERNAME", user), ("MAIL_PASSWORD", pw), ("MAIL_TO", to)) if not v]
-    if missing:
-        raise RuntimeError(f"尚未設定 GitHub Secrets：{'、'.join(missing)}（請看 README 步驟 5）")
-    msg = MIMEMultipart()
+    if not (user and pw and to):
+        return
+    msg = MIMEText(html, "html", "utf-8")
     msg["Subject"], msg["From"], msg["To"] = subject, user, to
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-    for filename, content in attachments:
-        part = MIMEApplication(content, Name=filename)
-        part["Content-Disposition"] = f'attachment; filename="{filename}"'
-        msg.attach(part)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as s:
-        s.login(user, pw.replace(" ", ""))
-        s.sendmail(user, [x.strip() for x in to.split(",") if x.strip()], msg.as_string())
-    print(f"    已寄出 Email 給 {to}")
+        s.login(user, pw)
+        s.sendmail(user, [x.strip() for x in to.split(",")], msg.as_string())
+    print("已寄出 Email 報告")
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--no-email", action="store_true", help="不寄信，只產生報告檔")
-    args = ap.parse_args()
-    manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" or args.no_email
-
     today = data.taipei_today()
+    print(f"程式版本：{config.VERSION}")
     print(f"執行日期（台北時間）：{today}")
 
     print("1/4 更新股票清單與產業分類…")
@@ -56,18 +42,17 @@ def main():
     print("2/4 補齊歷史行情…")
     today_ok, fetched = data.update_history(today)
     print(f"    新抓取 {fetched} 天")
-    report_date = today
     if not today_ok:
-        latest = data.latest_trading_date()
-        if not manual or latest is None:
-            print("今天沒有收盤資料（休市，或交易所尚未公布），今天不寄報告。")
-            return
-        report_date = latest
-        print(f"    今天沒有收盤資料，手動執行改用最近交易日 {latest}")
+        print("今天沒有收盤資料（休市，或交易所尚未公布）。保留上一次的報告。")
+        DOCS.mkdir(exist_ok=True)
+        if not (DOCS / "index.html").exists():
+            (DOCS / "index.html").write_text(
+                report.render_closed(str(today), "今天沒有收盤資料，可能是休市或交易所尚未公布。下一個交易日下午 5 點後會自動產生報告。"),
+                encoding="utf-8")
+        return
 
     print("3/4 計算指標與選股…")
     history = data.load_history()
-    history = history[history["date"] <= pd.Timestamp(report_date)]
     panels, names = analysis.build_panels(history, stock_list)
     trend, rebound = analysis.screen_stocks(panels, names, stock_list)
     rotation = analysis.sector_rotation(panels, stock_list)
@@ -81,23 +66,20 @@ def main():
         print("    族群熱度前 3：" + "、".join(rotation.index[:3]))
 
     print("4/4 產生報告…")
-    date_str = str(report_date)
-    full_html = report.render(date_str, top, rotation, trend, rebound, scanned)
-    mail_html = report.render_email(date_str, top, rotation, trend, rebound, scanned)
-    csv_bytes = report.to_csv(trend, rebound)
-    OUT.mkdir(exist_ok=True)
-    (OUT / "report.html").write_text(full_html, encoding="utf-8")
-    (OUT / "email.html").write_text(mail_html, encoding="utf-8")
-    (OUT / "candidates.csv").write_bytes(csv_bytes)
-    print(f"    報告已存到 {OUT}")
+    ARCHIVE.mkdir(parents=True, exist_ok=True)
+    date_str = str(today)
+    (ARCHIVE / f"{date_str}.html").write_text(
+        report.render(date_str, top, rotation, trend, rebound, scanned), encoding="utf-8")
+    past = sorted((p.stem for p in ARCHIVE.glob("*.html")), reverse=True)[1:21]
+    links = [(d, f"archive/{d}.html") for d in past]
+    html = report.render(date_str, top, rotation, trend, rebound, scanned, links)
+    (DOCS / "index.html").write_text(html, encoding="utf-8")
+    print("    已更新 docs/index.html")
 
-    if args.no_email:
-        return
-    top_names = "、".join(f"{c} {r['name']}" for c, r in top.head(3).iterrows())
-    subject = f"台股盤後選股 {date_str}" + (f"｜{top_names}" if top_names else "")
-    send_email(subject, mail_html,
-               [(f"report_{date_str}.html", full_html.encode("utf-8")),
-                (f"candidates_{date_str}.csv", csv_bytes)])
+    try:
+        send_email(f"台股盤後選股 {date_str}", html)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠ Email 寄送失敗：{e}")
 
 
 if __name__ == "__main__":
